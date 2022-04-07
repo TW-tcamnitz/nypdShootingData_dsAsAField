@@ -1,0 +1,208 @@
+---
+title: "NYPD Shooting Data"
+author: "Todd Camnitz"
+date: '2022-03-28'
+output: html_document
+---
+
+# NYPD Shooting Data - A Reproducibility Exercise
+
+## Import and describe the NYPD shooting data in a reproducible manner.
+I'm doing this by loading from the URL directly, 
+even though I've also downloaded the csv file locally.
+
+Please note that I'm a fan of working in base R, 
+as opposed to tidyverse, for most operations.
+
+First, load the data, convert the single date field
+to "date" type, and run str() to give a summary of 
+the 19 fields in the data, plus summary() for
+some additional info. I'm ignoring the "time" field
+for now, as analyses I run rarely use this level of 
+granularity. I may change my mind about this later.
+```{r loadNpyd, echo=T}
+nypdShootingData <- read.csv(
+  "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD", na.strings="")
+nypdShootingData$OCCUR_DATE <- as.Date(nypdShootingData$OCCUR_DATE, format="%m/%d/%Y")
+str(nypdShootingData)
+summary(nypdShootingData)
+```
+
+## Tidy and Transform the Data
+The instructions for this section tell us to: 
+
+- Add a summary of the data
+- Clean up the data by changing appropriate variables to factor and date types
+- Get rid of unneeded variables
+- Check for missingness
+- State our plan for dealing with missingness
+
+# Some commentary on these steps
+I've already run summaries and converted the date variable in the previous section. 
+I also prefer to leave categorical text variables as character, rather than factor (as certain
+operations I often perform in R can introduce unintended NAs when working with
+factors). This can be disasterous if not noticed. If we're looking to understand the levels
+present with categorical vars, like BORO or PRECINT, or the demographics vars, we can always
+just run table() on those columns to see what we need. But I wouldn't start doing this without
+some sort of research or evaluation question guiding the analysis. There's no need, for example,
+to bother putting a lot of effort into cleaning up a race variable if we're not going to do any
+racial disparity analysis.
+
+We're directed to remove unneeded variables, but without a starting question or goal
+for the data it's difficult to know what is and is not needed. Based on prior experience,
+I'm going to assume we won't be doing any mapping with this data, but the remaining variables
+may contain information we'd like to subset by down the road. For now, I'll just remove
+the geocoding variables, though it's worth pointing out that with a dataset of this size, 
+there's really no reason to do this. They can be retained with little consequence regardless.
+
+Remove the geocoding variables for the sake of the exercise
+```{r removeVars}
+tempRemoveVars <- c("X_COORD_CD", "Y_COORD_CD", "Latitude", "Longitude", "Lon_Lat")
+nypdShootingData[,tempRemoveVars] <- NULL 
+```
+Examine the levels present in some of the variables I may wish to conduct analysis on.
+Let's assume we'll do some sort of analysis on the demographics of the perpetrators
+and the victims. I'm going to do this by creating a vector of each of the demographic
+variable names in the data, then looping through each one, calling table() on each as
+I go.
+```{r demogSummary}
+tempTableVars <- c("PERP_AGE_GROUP", "PERP_SEX", "PERP_RACE", 
+                   "VIC_AGE_GROUP", "VIC_SEX", "VIC_RACE")
+for(thisVar in tempTableVars){
+  print(paste0("Levels present in ", thisVar))
+  print(table(nypdShootingData[,thisVar], useNA="always"))
+} # end thisVar
+```
+In terms of dealing with missing or NA values, I already set all blanks to NA 
+when I first loaded in the data. There is plenty of missingness throughout.
+I added this after looking at the dataset for the first time. 
+Subsequent code will be written to handle any operations on the dataset with
+the fact that there are NAs present in mind. Unsurprisingly, looking through
+the completeness of the demographic variables, there's much more complete data
+for victims than for perpetrators.
+
+# Several Other Observations
+After running the table() commands, I can see that perpetrator age group
+has several nonsense values, though without a codebook I don't know if 
+they're meaningful in some way or just mistakes. I also see "unknown" is 
+typed out for some variables, but for sex it (presumably) just takes 
+the values "u". 
+
+## Add Visualizations and Analysis
+
+Here, we're directed to:
+
+- Add at least two visualization and some analysis
+- Consider whether these additions raise any questions
+
+Let's look at two things:
+
+1. The overall count of victims by race, including unknown
+2. The relationship between murder flag by borough
+
+I'll do this using ggplot2, since the default aesthetics are pleasant.
+I'm also going to turn the chart sideways so the x axis labels don't
+overrun each other. I could name the var levels, instead, or rotate the var
+labels 45 degrees on the graph, but I prefer this solution.
+```{r victimPlot}
+library(ggplot2)
+vicPlot <- ggplot(data = nypdShootingData, aes(VIC_RACE))+
+                    geom_bar()
+
+vicPlot + coord_flip()
+```
+
+It's not encouraging to note that shooting victims in New York city are
+predominantly Black. However, this data really shouldn't be analyzed without
+using population-adjusted figures. Ideally, we'd have regional population proportions
+to compare against here. 
+
+Let's also explore the distribution of perpetrator races.
+
+```{r perpPlot}
+library(ggplot2)
+perpPlot <- ggplot(data = nypdShootingData, aes(PERP_RACE))+
+                    geom_bar()
+
+perpPlot + coord_flip()
+```
+
+Now let's look at the murder flag proportions across the boroughs.
+```{r boroughFlags}
+boroPlot <- ggplot(data = nypdShootingData, aes(BORO, fill=STATISTICAL_MURDER_FLAG))+
+                    geom_bar(position="stack")
+boroPlot + coord_flip()
+```
+
+I don't visually see radically different proportions of murder flag = true, necessarily, for
+any one borough over any other. We could test these proportions, if we wanted, statistically.
+One way to do this is by creating 5 binary variables to test each borough
+against the average of all the others. I'm going to add these variables to the dataset, then run the test between this binary categorical variable and the murder flag categorical variable. Here, the null hypothesis is that the shooting occurring in any one borough makes it no more or less likely the shooting
+will have a "true" murder flag. Note that this is doing five tests, one test for each borough, where we test that borough against the average of all the other boroughs. 
+
+```{r chiTest}
+nypdShootingData$brookTest <- ifelse(nypdShootingData$BORO=="BROOKLYN",1,0)
+nypdShootingData$statIsTest <- ifelse(nypdShootingData$BORO=="STATEN ISLAND",1,0)
+nypdShootingData$queenTest <- ifelse(nypdShootingData$BORO=="QUEENS",1,0)
+nypdShootingData$manhatTest <- ifelse(nypdShootingData$BORO=="MANHATTAN",1,0)
+nypdShootingData$bronxTest <- ifelse(nypdShootingData$BORO=="BRONX",1,0)
+nypdShootingData$murderTest <- ifelse(nypdShootingData$STATISTICAL_MURDER_FLAG=="true",1,0)
+
+brookModel <- lm(nypdShootingData$murderTest ~ nypdShootingData$brookTest)
+statIsModel <- lm(nypdShootingData$murderTest ~ nypdShootingData$statIsTest)
+queenModel <- lm(nypdShootingData$murderTest ~ nypdShootingData$queenTest)
+manhatModel <- lm(nypdShootingData$murderTest ~ nypdShootingData$manhatTest)
+bronxModel <- lm(nypdShootingData$murderTest ~ nypdShootingData$bronxTest)
+```
+
+```{r printModelResuls, echo=F}
+print("Slope on Brooklyn vs All Else")
+summary(brookModel)[4]
+print("Slope on Staten Island vs All Else")
+summary(statIsModel)[4]
+print("Slope on Queens vs All Else")
+summary(queenModel)[4]
+print("Slope on Manhattan vs All Else")
+summary(manhatModel)[4]
+print("Slope on The Bronx vs All Else")
+summary(bronxModel)[4]
+```
+
+By convention, we'd like our p-value to be <= 0.05 to consider rejecting the null.
+For most tests, this isn't the case, so we don't have enough evidence to conclude that shootings
+are more likely to receive the murder = "true" flag if they occurred in any particular borough, with the exception of Manhattan. The p-value of 0.03 along with a negative coefficient on the independent variable suggests that it might be slightly less likely in Manhattan for the murder flag to equal true, than across all the other boroughs on average combined. 
+
+This outcome supplements what appears in the graph visually, which is that the proportion of murder flag = "true" is roughly independent of the borough in which the shooting occurred. This suggests that this flag is usually being driven by something other than geography, or other factors linked to geography that socioeconomic status or race. The effect in Manhattan, though statistically significant, appears small. 
+
+Another hypothesis we might form here is that the number of shootings is highly correlated
+with certain demographic factors. I think plenty of research has already shown this to
+be true, but one path for future analysis could be to find a dataset of demographic
+breakdowns by geography in the overall population, and see what correlations exist in that 
+data and the areas in which we tend to see the most shootings. The Social Vulnerability Index
+is another great dataset that this data could be compared against, which takes into account
+many more factors than race, like housing stability, poverty, education, etc. 
+
+## A Comment on Bias in this Analysis
+
+I'm quite biased looking at this data from my history of reading about gun violence in the U.S., 
+and the extensive racial disparity research and work I've done in my professional career. In fact,
+coming into this assignment, I had already built prior notions about what I'd see. In this way,
+my analysis and experience of the data was subject to extensive confirmation bias, which comes 
+across in my wording of findings after looking at my initial graph. 
+
+I'm also assuming here, with no justification from the data at hand whatsoever, 
+that the majority of shooting cases in New York city reflected in this data come from gang 
+activity. 
+
+It's worth noting I'm making these assumptions when looking at the data because, in truth, 
+the data here alone really doesn't necessarily support any of these conclusions. 
+We can't even technically assume that Black individuals in New York City truly are 
+victims of shooting at a higher rate than the other demographics, without underlying population
+figures to compare this data to. It's really the rate of shootings that carries more interpetive
+power, not the total count. Sure, Black individuals may account for 80% or so of all shooting
+victims, but if Black individuals also accounted, for instance, for 80% of the total population
+then this might not be very shocking. (I happen to know that's the true, but the point stands.)
+
+I'm mitigating bias by refraining from drawing strong conclusions about the state of the world,
+or any actions we should take, merely from the data present in this dataset. I'm attempting
+only to state precisely what's here, no more, and no less.
